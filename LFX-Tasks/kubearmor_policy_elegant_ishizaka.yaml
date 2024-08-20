@@ -1,0 +1,18 @@
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: process-block-elegant_ishizaka
+spec:
+  severity: 5
+  message: "a critical file was accessed"
+  tags:
+  - WARNING
+  selector:
+    matchLabels:
+      kubearmor.io/container.name: elegant_ishizaka
+  process:
+    matchPaths:
+      - path: /usr/bin/ls
+      - path: /usr/bin/sleep
+  action:
+    Block
