@@ -88,6 +88,7 @@ This document outlines the process of setting up KubeArmor in Unorchestrated mod
          }
      }
      ```
+     This Script can be found by name list-containers.go in LFX-Tasks Dir
 
 3. **Replace Container Names in KubeArmor Policy**:
    - Modify the Go script to replace the container names in the KubeArmor policy template:
@@ -97,7 +98,8 @@ This document outlines the process of setting up KubeArmor in Unorchestrated mod
      metadata:
        name: example-container-policy
        annotations:
-         kubearmor.io/container.name: lb
+         kubearmor.io/container.name: busy_babbage
+         kubearmor.io/container.name: ishizaka
      spec:
        process:
          matchPaths:
@@ -112,19 +114,116 @@ This document outlines the process of setting up KubeArmor in Unorchestrated mod
      ```bash
      karmor vm policy add ./generated_policy.yaml
      ```
+     - this created kubearmor_containerpolicy.yaml,kubearmor_policy_busy_babbage.yaml which can be seen in LFX_Tasks Directory
 
 5. **Automatically Apply Policies**:
    - Extend the script to automatically call the function that applies policies:
      ```go
-     func applyPolicy(policy string) {
-         // Code to apply policy using karmor CLI
+     package main
+      import (
+       "context"
+       "fmt"
+       "log"
+       "os"
+       "os/exec"
+       "path/filepath"
+       "text/template"
+
+       "github.com/docker/docker/api/types"
+       "github.com/docker/docker/client"
+      )
+
+      // KubeArmorPolicy defines the structure for the YAML file
+      type KubeArmorPolicy struct {
+       ContainerName string
+      }
+
+      // Template for the KubeArmorPolicy YAML
+      const kubeArmorPolicyTemplate = `apiVersion: security.kubearmor.com/v1
+      kind: KubeArmorPolicy
+      metadata:
+     name: process-block-{{ .ContainerName }}
+      spec:
+     severity: 5
+     message: "a critical file was accessed"
+     tags:
+     - WARNING
+     selector:
+       matchLabels:
+      kubearmor.io/container.name: {{ .ContainerName }}
+     process:
+       matchPaths:
+         - path: /usr/bin/ls
+         - path: /usr/bin/sleep
+     action:
+       Block
+      `
+
+      func main() {
+       cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+       if err != nil {
+           log.Fatalf("Error creating Docker client: %v", err)
+       }
+
+       containers, err := cli.ContainerList(context.Background(), types.ContainerListOptions{})
+       if err != nil {
+           log.Fatalf("Error listing containers: %v", err)
+       }
+
+       for _, container := range containers {
+           // Use the first name of the container as the container name
+           containerName := container.Names[0][1:] // remove the leading '/'
+           policy := KubeArmorPolicy{ContainerName: containerName}
+
+        // Generate YAML file
+        yamlFileName := fmt.Sprintf("kubearmor_policy_%s.yaml", containerName)
+        err := generateYAMLFile(yamlFileName, policy)
+        if err != nil {
+            log.Fatalf("Error generating YAML file: %v", err)
+        }
+
+        // Apply the KubeArmorPolicy using the karmor command
+        err = applyKubeArmorPolicy(yamlFileName)
+        if err != nil {
+            log.Fatalf("Error applying KubeArmor policy: %v", err)
+        }
+
+        fmt.Printf("Applied KubeArmorPolicy for container: %s\n", containerName)
+       }
+      }
+
+      func generateYAMLFile(fileName string, policy KubeArmorPolicy) error {
+       tmpl, err := template.New("policy").Parse(kubeArmorPolicyTemplate)
+       if err != nil {
+           return err
+       }
+
+       file, err := os.Create(fileName)
+       if err != nil {
+           return err
+       }
+       defer file.Close()
+
+       return tmpl.Execute(file, policy)
      }
-     
-     func main() {
-         // Code to extract containers and generate policies
-         applyPolicy(updatedPolicy)
-     }
+
+      func applyKubeArmorPolicy(yamlFileName string) error {
+          absPath, err := filepath.Abs(yamlFileName)
+          if err != nil {
+              return err
+          }
+
+       cmd := exec.Command("karmor", "vm", "policy", "add", absPath)
+       output, err := cmd.CombinedOutput()
+       if err != nil {
+           return fmt.Errorf("error running karmor: %v, output: %s", err, output)
+       }
+
+       return nil
+      }
      ```
+
+     This code can be found in LFX-Tasks dir named by main.go
 
 #### Challenges Faced
 
@@ -155,8 +254,3 @@ This document outlines the process of setting up KubeArmor in Unorchestrated mod
   - **Problem**: Monitoring logs in real-time caused performance issues on the node.
   - **Solution**: Limited the number of log entries displayed or used filtering options to focus on specific containers or events.
 
-
-### Future Work
-
-- **Enhanced Automation**: Consider further automating the policy generation and application process.
-- **Policy Optimization**: Explore ways to optimize KubeArmor policies for better performance and security.
